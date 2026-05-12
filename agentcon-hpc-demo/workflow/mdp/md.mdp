@@ -1,0 +1,42 @@
+; md.mdp - 50 ps unrestrained production MD, NVT.
+;          Sized for ~15s on a T4. Not a publication run.
+title       = production MD
+
+integrator  = md
+nsteps      = 25000           ; 50 ps
+dt          = 0.002
+
+; output (write trajectory frames every 0.5 ps -> 100 frames total)
+nstxout              = 0
+nstvout              = 0
+nstenergy            = 250
+nstlog               = 250
+nstxout-compressed   = 250
+
+continuation         = yes     ; continue from NVT
+constraint_algorithm = lincs
+constraints          = h-bonds
+lincs_iter           = 1
+lincs_order          = 4
+
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 10
+rcoulomb        = 1.0
+rvdw            = 1.0
+
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+
+tcoupl          = V-rescale
+tc-grps         = Protein Non-Protein
+tau_t           = 0.1     0.1
+ref_t           = 300     300
+
+pcoupl          = no           ; NVT for the demo; add NPT for real work
+
+pbc             = xyz
+DispCorr        = EnerPres
+
+gen_vel         = no

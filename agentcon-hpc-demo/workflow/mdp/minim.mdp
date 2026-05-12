@@ -1,0 +1,13 @@
+; minim.mdp - steepest-descent energy minimization
+integrator  = steep
+emtol       = 1000.0          ; converge when max force < 1000 kJ/mol/nm
+emstep      = 0.01
+nsteps      = 5000             ; cap; usually converges much earlier
+
+nstlist         = 10
+cutoff-scheme   = Verlet
+ns_type         = grid
+coulombtype     = PME
+rcoulomb        = 1.0
+rvdw            = 1.0
+pbc             = xyz

@@ -1,0 +1,53 @@
+; nvt.mdp - 50 ps NVT equilibration with position restraints on protein
+;           sized for the live demo, not for a publication-quality run.
+title       = NVT equilibration
+
+define      = -DPOSRES        ; use posre.itp from pdb2gmx
+
+integrator  = md
+nsteps      = 25000           ; 25000 * 2 fs = 50 ps
+dt          = 0.002
+
+; output
+nstxout              = 0
+nstvout              = 0
+nstenergy            = 500
+nstlog               = 500
+nstxout-compressed   = 500
+
+; bond constraints
+continuation         = no
+constraint_algorithm = lincs
+constraints          = h-bonds
+lincs_iter           = 1
+lincs_order          = 4
+
+; neighbor search
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 10
+rcoulomb        = 1.0
+rvdw            = 1.0
+
+; electrostatics
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+
+; temperature coupling
+tcoupl          = V-rescale
+tc-grps         = Protein Non-Protein
+tau_t           = 0.1     0.1
+ref_t           = 300     300
+
+; no pressure coupling in NVT
+pcoupl          = no
+
+; periodic boundary conditions
+pbc             = xyz
+DispCorr        = EnerPres
+
+; velocity generation
+gen_vel         = yes
+gen_temp        = 300
+gen_seed        = -1

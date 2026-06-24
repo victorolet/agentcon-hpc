@@ -1,0 +1,13 @@
+az account list-locations --query "[].name" -o tsv | \
+xargs -I {} -P 8 bash -c '
+
+region="{}"
+
+result=$(az vm list-sizes \
+    --location "$region" \
+    --query "[?contains(name, '\''NV8as_v4'\'')].name" \
+    -o tsv 2>/dev/null)
+
+if [[ -n "$result" ]]; then
+    echo "$region"
+f

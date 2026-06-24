@@ -15,7 +15,7 @@ set -euo pipefail
 : "${RG:=agentcon-hpc-demo}"
 : "${LOCATION:=eastus}"
 : "${VM_NAME:=hpc-agent-vm}"
-: "${VM_SIZE:=Standard_NV8as_v4}"   # 8 vCPU, 28 GB, 1/8 of an AMD MI25 (Vega 10 / gfx900). See docs/gpu-vendors.md.
+: "${VM_SIZE:=Standard_NC4as_T4_v3}"   # 8 vCPU, 28 GB, 1/8 of an AMD MI25 (Vega 10 / gfx900). See docs/gpu-vendors.md.
 : "${ADMIN_USER:=azureuser}"
 : "${SSH_KEY_PATH:=$HOME/.ssh/agentcon.pub}"
 # Lock SSH down to your current public IP. Override MY_IP if you know better.

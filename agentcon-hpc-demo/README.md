@@ -35,7 +35,7 @@ This repo supports three compute substrates behind the same agent and tool surfa
 |---|---|---|---|
 | `amd` (primary, given your `NV8as_v4` quota) | `NV*as_v4` (AMD MI25) | `infra/setup-vm-amd.sh` | `docker build -f container/Dockerfile.rocm -t gromacs-demo:rocm container/` |
 | `nvidia` | `NC*_T4_v3`, `NV*_A10` | `infra/setup-vm.sh` | `docker build -t gromacs-demo:cuda container/` |
-| `cpu` (safety net) | any | `infra/setup-vm.sh` (Docker only) | `docker build -f container/Dockerfile.cpu -t gromacs-demo:cpu container/` |
+| `cpu` (safety net) | any | `infra/setup-vm-cpu.sh` | `docker build -f container/Dockerfile.cpu -t gromacs-demo:cpu container/` |
 
 **Important:** the AMD path on `NV*as_v4` is not officially supported by Azure for compute (the family is marketed for visualization). Whether ROCm can actually see the MI25 partition through the MxGPU layer is the open question — `infra/setup-vm-amd.sh` reports honestly whether `rocminfo` finds it. If it doesn't, fall back to `GPU_VENDOR=cpu` for the demo (90–180 s production MD on 8 vCPU) or request NVIDIA `NC4as_T4_v3` quota. The full discussion is in [`docs/gpu-vendors.md`](docs/gpu-vendors.md).
 
@@ -55,6 +55,7 @@ agentcon-hpc-demo/
 │   ├── provision-vm.sh             # azure-cli: create RG, GPU VM, NSG, MI
 │   ├── setup-vm.sh                 # on-VM: Docker + NVIDIA Container Toolkit
 │   ├── setup-vm-amd.sh             # on-VM: Docker + AMDGPU/ROCm stack
+│   ├── setup-vm-cpu.sh             # on-VM: Docker only (safety-net / CPU path)
 │   └── teardown.sh                 # delete RG when done
 ├── container/
 │   ├── Dockerfile                  # CUDA / NVIDIA GROMACS image

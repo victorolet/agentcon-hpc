@@ -20,7 +20,7 @@ If ROCm comes up and `rocminfo` lists `gfx900`, you're in business. If it doesn'
 |---|---|---|---|---|
 | **AMD / ROCm** | `NV*_v4` (MI25) — primary, given your quota | `infra/setup-vm-amd.sh` | `Dockerfile.rocm` | 30–60 s if ROCm sees the GPU |
 | **NVIDIA / CUDA** | `NC*_T4`, `NV*_A10` — original target | `infra/setup-vm.sh` | `Dockerfile.cuda` (renamed from `Dockerfile`) | ~15 s on T4, ~8 s on A10 |
-| **CPU only** | Anything; safety net | `infra/setup-vm.sh --cpu` *(or just install Docker)* | `Dockerfile.cpu` | 90–180 s on 8 vCPU |
+| **CPU only** | Anything; safety net | `infra/setup-vm-cpu.sh` | `Dockerfile.cpu` | 90–180 s on 8 vCPU |
 
 The runtime selector everything respects is the `GPU_VENDOR` environment variable: `amd`, `nvidia`, or `cpu`. Set it once in `agent/.env` and the workflow scripts pick the right `docker run` flags, the right image tag, and the right log messages.
 
@@ -93,12 +93,17 @@ I would pick **(1) for the talk** and start **(2) in parallel** so you have the 
 
 The CPU image is a separate, tiny Dockerfile. It's worth keeping around even on a working GPU machine: it's your "the GPU broke five minutes before I go on stage" insurance.
 
+If you're standing up a fresh VM and going CPU-only from the start:
+
 ```bash
-docker build -f Dockerfile.cpu -t gromacs-demo:cpu container/
-# in .env:
+./infra/setup-vm-cpu.sh              # Docker + Python only, no GPU driver, no reboot
+cd container && docker build -f Dockerfile.cpu -t gromacs-demo:cpu .
+# in agent/.env:
 GPU_VENDOR=cpu
 GMX_IMAGE=gromacs-demo:cpu
 ```
+
+If you already ran `setup-vm-amd.sh` and ROCm couldn't see the GPU, you don't need to run anything else — Docker and Python are already installed. Just build `Dockerfile.cpu` and flip `GPU_VENDOR` in `.env`.
 
 `run_stage.sh` knows that with `GPU_VENDOR=cpu` it should drop `-nb gpu -update gpu -bonded gpu` from the mdrun command and just let GROMACS use all available cores. On 8 vCPUs lysozyme 50 ps prod completes in roughly 90–180 s; the equilibration is similar. The agent's narration doesn't change at all — the model never knew what hardware it was on.
 

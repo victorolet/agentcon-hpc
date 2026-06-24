@@ -15,7 +15,7 @@ set -euo pipefail
 : "${RG:=agentcon-hpc-demo}"
 : "${LOCATION:=eastus}"
 : "${VM_NAME:=hpc-agent-vm}"
-: "${VM_SIZE:=Standard_NC4as_T4_v3}"   # 4 vCPU, 28 GB, 1x T4. Cheapest GPU.
+: "${VM_SIZE:=NV8as_v4}"   # 4 vCPU, 28 GB, 1x T4. Cheapest GPU.
 : "${ADMIN_USER:=azureuser}"
 : "${SSH_KEY_PATH:=$HOME/.ssh/id_rsa.pub}"
 # Lock SSH down to your current public IP. Override MY_IP if you know better.

@@ -29,6 +29,9 @@ WORKFLOW_DIR=$(cd "$(dirname "$0")" && pwd)
 MDP_DIR="$WORKFLOW_DIR/mdp"
 IMAGE=${GMX_IMAGE:-gromacs-demo:latest}
 
+# shellcheck source=workflow/_runtime.sh
+source "$WORKFLOW_DIR/_runtime.sh"
+
 mkdir -p "$RUN_DIR/topology"
 cd "$RUN_DIR"
 
@@ -42,9 +45,12 @@ fi
 grep -v '^HETATM.*HOH' raw.pdb > protein.pdb
 
 # Helper to run gmx in the container with /data mounted at /data.
+# DOCKER_GPU_ARGS is set by _runtime.sh based on GPU_VENDOR. None of the
+# preparation steps actually use the GPU, but we pass the args anyway so a
+# single image works for both prep and mdrun stages.
 gmx() {
   docker run --rm \
-    --gpus all \
+    "${DOCKER_GPU_ARGS[@]}" \
     -v /data:/data \
     -w "$RUN_DIR" \
     "$IMAGE" \

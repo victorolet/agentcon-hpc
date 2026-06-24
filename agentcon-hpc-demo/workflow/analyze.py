@@ -32,11 +32,28 @@ import numpy as np
 
 
 IMAGE = os.environ.get("GMX_IMAGE", "gromacs-demo:latest")
+GPU_VENDOR = os.environ.get("GPU_VENDOR", "nvidia")
+
+# Pick docker --device / --gpus flags based on the GPU vendor. Mirrors
+# workflow/_runtime.sh so we don't end up with the host trying to attach
+# an NVIDIA runtime to an AMD image (or vice versa). Analysis doesn't need
+# GPU, but the image expects to be runnable regardless.
+_DOCKER_GPU_ARGS: dict[str, list[str]] = {
+    "nvidia": ["--gpus", "all"],
+    "amd": [
+        "--device=/dev/kfd",
+        "--device=/dev/dri",
+        "--group-add", "video",
+        "--security-opt", "seccomp=unconfined",
+    ],
+    "cpu": [],
+}
 
 
 def gmx(run_dir: Path, *args: str, stdin: str = "") -> str:
     cmd = [
         "docker", "run", "--rm",
+        *_DOCKER_GPU_ARGS.get(GPU_VENDOR, []),
         "-v", "/data:/data",
         "-w", str(run_dir),
         "-i", IMAGE,

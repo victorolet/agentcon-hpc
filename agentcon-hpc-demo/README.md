@@ -27,6 +27,20 @@ This demo is **not**:
 
 ---
 
+## GPU vendor selection
+
+This repo supports three compute substrates behind the same agent and tool surface, selected with the `GPU_VENDOR` env var:
+
+| `GPU_VENDOR` | VM family | Setup script | Container build |
+|---|---|---|---|
+| `amd` (primary, given your `NV8as_v4` quota) | `NV*as_v4` (AMD MI25) | `infra/setup-vm-amd.sh` | `docker build -f container/Dockerfile.rocm -t gromacs-demo:rocm container/` |
+| `nvidia` | `NC*_T4_v3`, `NV*_A10` | `infra/setup-vm.sh` | `docker build -t gromacs-demo:cuda container/` |
+| `cpu` (safety net) | any | `infra/setup-vm.sh` (Docker only) | `docker build -f container/Dockerfile.cpu -t gromacs-demo:cpu container/` |
+
+**Important:** the AMD path on `NV*as_v4` is not officially supported by Azure for compute (the family is marketed for visualization). Whether ROCm can actually see the MI25 partition through the MxGPU layer is the open question — `infra/setup-vm-amd.sh` reports honestly whether `rocminfo` finds it. If it doesn't, fall back to `GPU_VENDOR=cpu` for the demo (90–180 s production MD on 8 vCPU) or request NVIDIA `NC4as_T4_v3` quota. The full discussion is in [`docs/gpu-vendors.md`](docs/gpu-vendors.md).
+
+The agent does not change between paths. Only the image tag and the `GPU_VENDOR` variable change.
+
 ## Repo layout
 
 ```
@@ -35,15 +49,20 @@ agentcon-hpc-demo/
 ├── docs/
 │   ├── architecture.md             # architecture + diagrams + design rationale
 │   ├── demo-runbook.md             # pre-talk + on-stage script + fallbacks
-│   └── tool-calling-flow.md        # example end-to-end tool-call trace
+│   ├── tool-calling-flow.md        # example end-to-end tool-call trace
+│   └── gpu-vendors.md              # AMD / NVIDIA / CPU paths, NV8as_v4 notes
 ├── infra/
 │   ├── provision-vm.sh             # azure-cli: create RG, GPU VM, NSG, MI
 │   ├── setup-vm.sh                 # on-VM: Docker + NVIDIA Container Toolkit
+│   ├── setup-vm-amd.sh             # on-VM: Docker + AMDGPU/ROCm stack
 │   └── teardown.sh                 # delete RG when done
 ├── container/
-│   ├── Dockerfile                  # CUDA-enabled GROMACS image
+│   ├── Dockerfile                  # CUDA / NVIDIA GROMACS image
+│   ├── Dockerfile.rocm             # ROCm / AMD MI25 GROMACS image (SYCL via AdaptiveCpp)
+│   ├── Dockerfile.cpu              # CPU-only GROMACS image (safety net)
 │   └── entrypoint.sh
 ├── workflow/
+│   ├── _runtime.sh                 # sourced helper: docker/mdrun args per GPU_VENDOR
 │   ├── run_stage.sh                # thin wrapper around gmx grompp/mdrun per stage
 │   ├── prepare_system.sh           # fetch PDB, pdb2gmx, solvate, ions
 │   ├── analyze.py                  # RMSD + potential energy plots, JSON summary

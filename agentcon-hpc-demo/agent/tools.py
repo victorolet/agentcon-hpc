@@ -24,10 +24,24 @@ from typing import Literal
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 WORKFLOW_DIR = Path(os.environ.get("WORKFLOW_DIR", "./workflow")).resolve()
 GMX_IMAGE = os.environ.get("GMX_IMAGE", "gromacs-demo:latest")
+GPU_VENDOR = os.environ.get("GPU_VENDOR", "nvidia").lower()
 
 PDB_ID_RE = re.compile(r"^[0-9A-Za-z]{4}$")
 ALLOWED_FF = {"oplsaa", "amber99sb-ildn", "charmm27"}
 ALLOWED_WATER = {"spc", "spce", "tip3p", "tip4p"}
+
+# Docker GPU args by vendor. Mirrors workflow/_runtime.sh so the agent's
+# in-process GPU probe uses the same wiring the workflow scripts use.
+_DOCKER_GPU_ARGS: dict[str, list[str]] = {
+    "nvidia": ["--gpus", "all"],
+    "amd": [
+        "--device=/dev/kfd",
+        "--device=/dev/dri",
+        "--group-add", "video",
+        "--security-opt", "seccomp=unconfined",
+    ],
+    "cpu": [],
+}
 
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
@@ -49,11 +63,54 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
 # Tools
 # --------------------------------------------------------------------------
 
-def check_environment() -> str:
-    """Verify Docker, the NVIDIA toolkit, and the GROMACS image are available.
+def _probe_gpu_nvidia() -> tuple[bool, str]:
+    """Run nvidia-smi inside a tiny CUDA container."""
+    out = subprocess.run(
+        ["docker", "run", "--rm", "--gpus", "all",
+         "nvidia/cuda:12.4.1-base-ubuntu22.04",
+         "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        text=True, capture_output=True, timeout=30,
+    )
+    if out.returncode == 0 and out.stdout.strip():
+        return True, out.stdout.strip().splitlines()[0]
+    return False, ""
 
-    Returns a JSON object with fields docker_ok, gpu_ok, image_present,
-    gpu_name, image_tag.
+
+def _probe_gpu_amd() -> tuple[bool, str]:
+    """Run rocminfo inside a ROCm container and pick out the gfx code/name."""
+    out = subprocess.run(
+        ["docker", "run", "--rm",
+         "--device=/dev/kfd", "--device=/dev/dri",
+         "--group-add", "video",
+         "--security-opt", "seccomp=unconfined",
+         "rocm/rocm-terminal:5.7",
+         "/opt/rocm/bin/rocminfo"],
+        text=True, capture_output=True, timeout=60,
+    )
+    if out.returncode != 0:
+        return False, ""
+    # rocminfo prints lines like "  Name:                    gfx900"
+    gfx = ""
+    marketing = ""
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if s.startswith("Name:") and "gfx" in s:
+            gfx = s.split()[-1]
+        if s.startswith("Marketing Name:"):
+            marketing = s.split(":", 1)[1].strip()
+    if gfx:
+        return True, f"{marketing or 'AMD GPU'} ({gfx})"
+    return False, ""
+
+
+def check_environment() -> str:
+    """Verify Docker, the GPU runtime, and the GROMACS image are available.
+
+    Probes the right GPU runtime for the configured GPU_VENDOR (nvidia, amd,
+    or cpu). If GPU_VENDOR=cpu, gpu_ok is reported as true with gpu_name="CPU".
+
+    Returns a JSON object with fields docker_ok, gpu_ok, gpu_name,
+    image_present, image_tag, gpu_vendor.
     """
     docker_ok = shutil.which("docker") is not None
     image_present = False
@@ -70,19 +127,19 @@ def check_environment() -> str:
             image_present = True
             image_tag = GMX_IMAGE
 
-        # Probe the GPU by running nvidia-smi inside a tiny CUDA container.
-        out = subprocess.run(
-            ["docker", "run", "--rm", "--gpus", "all",
-             "nvidia/cuda:12.4.1-base-ubuntu22.04",
-             "nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            text=True, capture_output=True, timeout=30,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            gpu_ok = True
-            gpu_name = out.stdout.strip().splitlines()[0]
+        try:
+            if GPU_VENDOR == "nvidia":
+                gpu_ok, gpu_name = _probe_gpu_nvidia()
+            elif GPU_VENDOR == "amd":
+                gpu_ok, gpu_name = _probe_gpu_amd()
+            elif GPU_VENDOR == "cpu":
+                gpu_ok, gpu_name = True, "CPU (no GPU offload configured)"
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            gpu_ok, gpu_name = False, ""
 
     return json.dumps({
         "docker_ok": docker_ok,
+        "gpu_vendor": GPU_VENDOR,
         "gpu_ok": gpu_ok,
         "gpu_name": gpu_name,
         "image_present": image_present,

@@ -22,10 +22,13 @@ WORKFLOW_DIR=$(cd "$(dirname "$0")" && pwd)
 MDP_DIR="$WORKFLOW_DIR/mdp"
 IMAGE=${GMX_IMAGE:-gromacs-demo:latest}
 
+# shellcheck source=workflow/_runtime.sh
+source "$WORKFLOW_DIR/_runtime.sh"
+
 cd "$RUN_DIR"
 
 gmx() {
-  docker run --rm --gpus all -v /data:/data -w "$RUN_DIR" "$IMAGE" gmx "$@"
+  docker run --rm "${DOCKER_GPU_ARGS[@]}" -v /data:/data -w "$RUN_DIR" "$IMAGE" gmx "$@"
 }
 
 # Helper: optionally rewrite nsteps in an mdp.
@@ -45,7 +48,14 @@ case "$STAGE" in
     mkdir -p em
     write_mdp "$MDP_DIR/minim.mdp" em/em.mdp
     gmx grompp -f em/em.mdp -c neutral.gro -p topology/topol.top -o em/em.tpr -maxwarn 1 >/dev/null
-    gmx mdrun -deffnm em/em -nb gpu -ntomp "$(nproc)" >/dev/null 2>&1
+    # Minimization is short; even on GPU mdrun runs it largely on CPU.
+    # Use only the -nb part of the GPU args if present (drop -bonded/-update
+    # which require a real MD integrator). We hand-roll for clarity.
+    if [[ ${#MDRUN_GPU_ARGS[@]} -gt 0 ]]; then
+      gmx mdrun -deffnm em/em -nb gpu -ntomp "$(nproc)" >/dev/null 2>&1
+    else
+      gmx mdrun -deffnm em/em -ntomp "$(nproc)" >/dev/null 2>&1
+    fi
     OUT_EDR=em/em.edr
     OUT_GRO=em/em.gro
     LOG=em/em.log
@@ -56,7 +66,7 @@ case "$STAGE" in
     write_mdp "$MDP_DIR/nvt.mdp" nvt/nvt.mdp
     gmx grompp -f nvt/nvt.mdp -c em/em.gro -r em/em.gro \
       -p topology/topol.top -o nvt/nvt.tpr -maxwarn 2 >/dev/null
-    gmx mdrun -deffnm nvt/nvt -nb gpu -bonded gpu -update gpu \
+    gmx mdrun -deffnm nvt/nvt "${MDRUN_GPU_ARGS[@]}" \
       -ntomp "$(nproc)" >/dev/null 2>&1
     OUT_EDR=nvt/nvt.edr
     OUT_GRO=nvt/nvt.gro
@@ -68,7 +78,7 @@ case "$STAGE" in
     write_mdp "$MDP_DIR/md.mdp" prod/md.mdp
     gmx grompp -f prod/md.mdp -c nvt/nvt.gro -t nvt/nvt.cpt \
       -p topology/topol.top -o prod/md.tpr -maxwarn 2 >/dev/null
-    gmx mdrun -deffnm prod/md -nb gpu -bonded gpu -update gpu \
+    gmx mdrun -deffnm prod/md "${MDRUN_GPU_ARGS[@]}" \
       -ntomp "$(nproc)" >/dev/null 2>&1
     OUT_EDR=prod/md.edr
     OUT_GRO=prod/md.gro

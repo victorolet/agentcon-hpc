@@ -1,0 +1,102 @@
+# GROMACS 2024.3 with the SYCL/AdaptiveCpp backend, targeting AMD MI25 (gfx900).
+#
+# We pin ROCm 5.7 because it is the last release with first-class support for
+# Vega 10 (gfx900). ROCm 6.x can be coerced into running on gfx900 via
+# HSA_OVERRIDE_GFX_VERSION=9.0.0 but reliability is not what we want for a
+# live demo.
+#
+# We pick the SYCL backend (via AdaptiveCpp, formerly hipSYCL) over the HIP
+# backend because:
+#   - HIP backend is newer in GROMACS and reports of gfx900 success are mixed
+#   - AdaptiveCpp explicitly supports gfx900 in its OMP-as-fallback layer
+#
+# Run on the host with:
+#   docker run --rm \
+#       --device=/dev/kfd --device=/dev/dri \
+#       --group-add video \
+#       --security-opt seccomp=unconfined \
+#       -v /data:/data \
+#       gromacs-demo:rocm <cmd>
+FROM rocm/dev-ubuntu-22.04:5.7-complete AS builder
+
+ARG GMX_VERSION=2024.3
+ARG ACPP_VERSION=v24.06.0
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git wget ca-certificates ninja-build \
+        libfftw3-dev libboost-all-dev libnuma-dev \
+        libomp-dev libssl-dev python3 python3-pip \
+        clang-15 lld-15 llvm-15-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- AdaptiveCpp (hipSYCL successor) ------------------------------------
+WORKDIR /tmp
+RUN git clone --depth 1 --branch ${ACPP_VERSION} \
+        https://github.com/AdaptiveCpp/AdaptiveCpp.git acpp \
+    && cmake -S acpp -B acpp/build -G Ninja \
+        -DCMAKE_INSTALL_PREFIX=/opt/acpp \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DROCM_PATH=/opt/rocm \
+        -DWITH_ROCM_BACKEND=ON \
+        -DWITH_CUDA_BACKEND=OFF \
+        -DWITH_CPU_BACKEND=ON \
+        -DLLVM_DIR=/usr/lib/llvm-15/cmake \
+        -DCLANG_EXECUTABLE_PATH=/usr/bin/clang++-15 \
+    && cmake --build acpp/build --target install
+
+ENV PATH=/opt/acpp/bin:$PATH
+
+# ---- GROMACS ------------------------------------------------------------
+WORKDIR /tmp
+RUN wget -q "https://ftp.gromacs.org/gromacs/gromacs-${GMX_VERSION}.tar.gz" && \
+    tar xf "gromacs-${GMX_VERSION}.tar.gz" && \
+    rm "gromacs-${GMX_VERSION}.tar.gz"
+
+# The SYCL targets list pins compilation to gfx900 (Vega 10 / MI25).
+# If you build for a different AMD GPU, change this to its gfx code
+# (e.g. gfx906 for MI50, gfx908 for MI100, gfx90a for MI250).
+WORKDIR /tmp/gromacs-${GMX_VERSION}/build
+RUN cmake .. \
+        -GNinja \
+        -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+        -DGMX_BUILD_OWN_FFTW=OFF \
+        -DGMX_GPU=SYCL \
+        -DGMX_SYCL=ACPP \
+        -DGMX_GPU_NB_CLUSTER_SIZE=8 \
+        -DACPP_TARGETS="hip:gfx900" \
+        -DCMAKE_C_COMPILER=clang-15 \
+        -DCMAKE_CXX_COMPILER=clang++-15 \
+        -DGMX_MPI=OFF \
+        -DGMX_OPENMP=ON \
+        -DREGRESSIONTEST_DOWNLOAD=OFF \
+    && ninja \
+    && ninja install
+
+# ---- runtime image ------------------------------------------------------
+FROM rocm/dev-ubuntu-22.04:5.7-complete
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libfftw3-3 libgomp1 libboost-fiber1.74.0 libboost-context1.74.0 \
+        ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/gromacs /opt/gromacs
+COPY --from=builder /opt/acpp /opt/acpp
+
+ENV PATH=/opt/gromacs/bin:/opt/acpp/bin:$PATH \
+    GMXLIB=/opt/gromacs/share/gromacs/top \
+    LD_LIBRARY_PATH=/opt/rocm/lib:/opt/acpp/lib:$LD_LIBRARY_PATH \
+    HSA_OVERRIDE_GFX_VERSION=9.0.0
+
+# Match host UID 1000 so files written to mounted /data are owned correctly.
+# Add to video and render groups (the GIDs vary; we'll rely on --group-add
+# video at docker run time for the actual device permission).
+RUN useradd -ms /bin/bash -u 1000 sim
+USER sim
+WORKDIR /data
+
+COPY --chown=sim:sim entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["gmx", "--version"]

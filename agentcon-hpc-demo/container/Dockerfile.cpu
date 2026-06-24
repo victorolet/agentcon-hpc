@@ -1,0 +1,56 @@
+# GROMACS 2024.3, CPU only. The safety-net image.
+#
+# Tiny build (~6 minutes on 8 vCPU), no GPU drivers, no vendor lock-in.
+# This is what runs if your AMD GPU isn't visible to ROCm, or if you just
+# want a guaranteed-working demo path with no driver dependencies.
+#
+# Run on the host with:
+#   docker run --rm -v /data:/data gromacs-demo:cpu <cmd>
+# No --gpus / --device flags needed.
+FROM ubuntu:22.04 AS builder
+
+ARG GMX_VERSION=2024.3
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake wget ca-certificates \
+        libfftw3-dev libopenmpi-dev openmpi-bin \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN wget -q "https://ftp.gromacs.org/gromacs/gromacs-${GMX_VERSION}.tar.gz" && \
+    tar xf "gromacs-${GMX_VERSION}.tar.gz" && \
+    rm "gromacs-${GMX_VERSION}.tar.gz"
+
+WORKDIR /tmp/gromacs-${GMX_VERSION}/build
+RUN cmake .. \
+        -DGMX_BUILD_OWN_FFTW=OFF \
+        -DGMX_GPU=OFF \
+        -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+        -DGMX_MPI=OFF \
+        -DGMX_OPENMP=ON \
+        -DREGRESSIONTEST_DOWNLOAD=OFF \
+        -DGMX_SIMD=AVX2_256 \
+    && make -j"$(nproc)" \
+    && make install
+
+# ---- runtime image ------------------------------------------------------
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libfftw3-3 libgomp1 ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/gromacs /opt/gromacs
+ENV PATH=/opt/gromacs/bin:$PATH \
+    GMXLIB=/opt/gromacs/share/gromacs/top
+
+RUN useradd -ms /bin/bash -u 1000 sim
+USER sim
+WORKDIR /data
+
+COPY --chown=sim:sim entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["gmx", "--version"]

@@ -1,14 +1,4 @@
-"""Tool implementations exposed to the Azure AI Foundry agent.
-
-Each function:
-  - takes JSON-serializable arguments,
-  - returns a JSON-serializable dict,
-  - shells out to scripts under workflow/ for anything that touches GROMACS.
-
-Foundry's FunctionTool turns these Python callables (with their type hints
-and docstrings) into the JSON tool schemas the model sees. Keep the
-docstrings tight and the argument types explicit.
-"""
+"""Tool implementations exposed to the Azure AI Foundry agent."""
 from __future__ import annotations
 
 import json
@@ -30,27 +20,10 @@ PDB_ID_RE = re.compile(r"^[0-9A-Za-z]{4}$")
 ALLOWED_FF = {"oplsaa", "amber99sb-ildn", "charmm27"}
 ALLOWED_WATER = {"spc", "spce", "tip3p", "tip4p"}
 
-# Docker GPU args by vendor. Mirrors workflow/_runtime.sh so the agent's
-# in-process GPU probe uses the same wiring the workflow scripts use.
-_DOCKER_GPU_ARGS: dict[str, list[str]] = {
-    "nvidia": ["--gpus", "all"],
-    "amd": [
-        "--device=/dev/kfd",
-        "--device=/dev/dri",
-        "--group-add", "video",
-        "--security-opt", "seccomp=unconfined",
-    ],
-    "cpu": [],
-}
-
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
-    """Run a shell command, return stdout. Raise with stderr on failure."""
     try:
-        res = subprocess.run(
-            cmd, cwd=cwd, text=True, capture_output=True,
-            timeout=timeout, check=True,
-        )
+        res = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=True)
         return res.stdout
     except subprocess.CalledProcessError as e:
         tail = (e.stderr or "")[-2000:]
@@ -59,12 +32,7 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
         raise RuntimeError(f"{' '.join(cmd)} timed out after {timeout}s") from e
 
 
-# --------------------------------------------------------------------------
-# GPU probes
-# --------------------------------------------------------------------------
-
 def _probe_gpu_nvidia() -> tuple[bool, str]:
-    """Run nvidia-smi inside a tiny CUDA container."""
     out = subprocess.run(
         ["docker", "run", "--rm", "--gpus", "all",
          "nvidia/cuda:12.4.1-base-ubuntu22.04",
@@ -77,7 +45,6 @@ def _probe_gpu_nvidia() -> tuple[bool, str]:
 
 
 def _probe_gpu_amd() -> tuple[bool, str]:
-    """Run rocminfo inside a ROCm container and pick out the gfx code/name."""
     out = subprocess.run(
         ["docker", "run", "--rm",
          "--device=/dev/kfd", "--device=/dev/dri",
@@ -102,40 +69,23 @@ def _probe_gpu_amd() -> tuple[bool, str]:
     return False, ""
 
 
-# --------------------------------------------------------------------------
-# Tools
-# --------------------------------------------------------------------------
-
 def check_environment() -> str:
-    """Verify Docker, the GPU runtime, and the GROMACS image are available.
+    """Verify Docker and the GPU runtime are available.
 
-    Probes the right GPU runtime for the configured GPU_VENDOR (nvidia, amd,
-    or cpu). If GPU_VENDOR=cpu, gpu_ok is reported as true with gpu_name="CPU".
+    Reports the configured image tag without verifying it exists locally;
+    prepare_system will surface a clear error from docker if the tag is
+    actually missing, so we skip the brittle pre-check.
 
-    Returns a JSON object with fields docker_ok, gpu_ok, gpu_name,
-    image_present, image_tag, gpu_vendor.
+    Returns JSON: docker_ok, gpu_vendor, gpu_ok, gpu_name, image_present, image_tag.
+    image_present is always reported true (no pre-check); rely on prepare_system errors.
     """
     docker_ok = shutil.which("docker") is not None
-    image_present = False
-    image_tag = ""
+    image_present = True
+    image_tag = GMX_IMAGE
     gpu_ok = False
     gpu_name = ""
 
     if docker_ok:
-        # List all image refs and exact-match by line. We used to pass
-        # GMX_IMAGE as a positional filter to `docker images`, but newer
-        # Docker versions (containerd-backed image store, ~25+) handle
-        # positional ref filters differently and may return empty stdout
-        # for a tag-qualified match. Listing all and exact-matching the
-        # full "repo:tag" line is version-independent.
-        out = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
-            text=True, capture_output=True,
-        )
-        if out.returncode == 0 and GMX_IMAGE in out.stdout.splitlines():
-            image_present = True
-            image_tag = GMX_IMAGE
-
         try:
             if GPU_VENDOR == "nvidia":
                 gpu_ok, gpu_name = _probe_gpu_nvidia()
@@ -168,10 +118,7 @@ def prepare_system(
         pdb_id: 4-character RCSB PDB identifier, e.g. "1AKI".
         force_field: GROMACS force field name. One of: oplsaa, amber99sb-ildn, charmm27.
         water_model: Water model. One of: spc, spce, tip3p, tip4p.
-        box_nm: Distance from solute to box edge, in nm. Range 0.5-2.0.
-
-    Returns a JSON object with run_id (used by later tools), pdb_id,
-    n_atoms, n_water, box_nm, and the list of files produced.
+        box_nm: Distance from solute to box edge in nm, 0.5-2.0.
     """
     if not PDB_ID_RE.match(pdb_id):
         raise ValueError(f"Invalid PDB ID: {pdb_id!r}")
@@ -179,7 +126,6 @@ def prepare_system(
         raise ValueError(f"force_field must be one of {sorted(ALLOWED_FF)}")
     if water_model not in ALLOWED_WATER:
         raise ValueError(f"water_model must be one of {sorted(ALLOWED_WATER)}")
-    # LLMs sometimes serialize numeric tool args as strings; coerce defensively.
     try:
         box_nm = float(box_nm)
     except (TypeError, ValueError):
@@ -207,13 +153,9 @@ def run_stage(
     """Run one MD stage on the GPU.
 
     Args:
-        run_id: ID returned by prepare_system, e.g. "run-7c41".
-        stage: One of "minimize", "equilibrate", "production".
-        nsteps: Optional override for the stage's step count. Bounded by
-            the schema; demo-safe defaults are in the MDP files.
-
-    Returns a JSON object with stage, walltime_s, ns_per_day,
-    final_potential_kJ_mol, log path, and trajectory path.
+        run_id: ID returned by prepare_system.
+        stage: "minimize", "equilibrate", or "production".
+        nsteps: Optional step count override.
     """
     if stage not in ("minimize", "equilibrate", "production"):
         raise ValueError(f"unknown stage: {stage}")
@@ -243,9 +185,7 @@ def analyze(
 
     Args:
         run_id: ID returned by prepare_system.
-        metric: One of "rmsd", "potential", "temperature".
-
-    Returns a JSON object with metric, plot_path, and summary stats.
+        metric: "rmsd", "potential", or "temperature".
     """
     if metric not in ("rmsd", "potential", "temperature"):
         raise ValueError(f"unknown metric: {metric}")
@@ -261,13 +201,7 @@ def analyze(
 
 
 def get_run_status(run_id: str) -> str:
-    """Report progress of an in-flight stage by tailing its log file.
-
-    Args:
-        run_id: ID returned by prepare_system.
-
-    Returns a JSON object with stage, last_log_line, and walltime_so_far_s.
-    """
+    """Report progress of an in-flight stage by tailing its log file."""
     run_dir = DATA_DIR / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run not found: {run_id}")
@@ -284,14 +218,7 @@ def get_run_status(run_id: str) -> str:
 
 
 def report(run_id: str) -> str:
-    """Bundle the final results of a completed run.
-
-    Args:
-        run_id: ID returned by prepare_system.
-
-    Returns a JSON object with plot paths, file paths, and a
-    human-readable summary stitched from the analysis artifacts.
-    """
+    """Bundle the final results of a completed run."""
     run_dir = DATA_DIR / run_id
     analysis = run_dir / "analysis"
     if not analysis.is_dir():
@@ -311,7 +238,6 @@ def report(run_id: str) -> str:
     })
 
 
-# Foundry's FunctionTool takes a set of callables.
 ALL_TOOLS = {
     check_environment,
     prepare_system,

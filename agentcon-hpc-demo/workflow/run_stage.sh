@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 # Run one MD stage (minimize | equilibrate | production) inside the GROMACS
 # container, on the GPU. Outputs JSON to stdout for the agent to parse.
-#
-# Usage:
-#   run_stage.sh <run_dir> <stage> [nsteps]
-#
-# Stages:
-#   minimize     -> em.tpr   -> em.{gro,edr,log}
-#   equilibrate  -> nvt.tpr  -> nvt.{gro,edr,log,xtc}   (NVT, position-restrained)
-#   production   -> md.tpr   -> md.{gro,edr,log,xtc}
-#
-# nsteps overrides the default in the corresponding .mdp via grompp's
-# -t/-r mechanism is overkill; instead we substitute into a per-run .mdp.
 set -euo pipefail
 
 RUN_DIR=${1:?run_dir required}
@@ -28,10 +17,9 @@ source "$WORKFLOW_DIR/_runtime.sh"
 cd "$RUN_DIR"
 
 gmx() {
-  docker run --rm "${DOCKER_GPU_ARGS[@]}" -v /data:/data -w "$RUN_DIR" "$IMAGE" gmx "$@"
+  docker run --rm -i "${DOCKER_GPU_ARGS[@]}" -v /data:/data -w "$RUN_DIR" "$IMAGE" gmx "$@"
 }
 
-# Helper: optionally rewrite nsteps in an mdp.
 write_mdp() {
   local src=$1 dst=$2
   if [[ -n "$NSTEPS" ]]; then
@@ -47,16 +35,19 @@ case "$STAGE" in
   minimize)
     mkdir -p em
     write_mdp "$MDP_DIR/minim.mdp" em/em.mdp
-    gmx grompp -f em/em.mdp -c neutral.gro -p topology/topol.top -o em/em.tpr -maxwarn 1 >/dev/null
-    # Minimization is short; even on GPU mdrun runs it largely on CPU.
-    # Use only the -nb part of the GPU args if present (drop -bonded/-update
-    # which require a real MD integrator). We hand-roll for clarity.
+    gmx grompp -f em/em.mdp -c neutral.gro -p topology/topol.top -o em/em.tpr -maxwarn 1 \
+      >em/grompp.out 2>&1 || { echo "grompp failed:" >&2; tail -50 em/grompp.out >&2; exit 1; }
     if [[ ${#MDRUN_GPU_ARGS[@]} -gt 0 ]]; then
-      gmx mdrun -deffnm em/em -nb gpu -ntomp "$(nproc)" >/dev/null 2>&1
+      MDRUN_CMD=(mdrun -deffnm em/em -nb gpu -ntmpi 1 -ntomp "$(nproc)")
     else
-      gmx mdrun -deffnm em/em -ntomp "$(nproc)" >/dev/null 2>&1
+      MDRUN_CMD=(mdrun -deffnm em/em -ntmpi 1 -ntomp "$(nproc)")
     fi
-    OUT_EDR=em/em.edr
+    gmx "${MDRUN_CMD[@]}" >em/mdrun.out 2>&1 || {
+      echo "mdrun (minimize) failed:" >&2
+      tail -50 em/mdrun.out >&2
+      [[ -f em/em.log ]] && { echo "--- em.log tail ---" >&2; tail -80 em/em.log >&2; }
+      exit 1
+    }
     OUT_GRO=em/em.gro
     LOG=em/em.log
     ;;
@@ -64,11 +55,15 @@ case "$STAGE" in
   equilibrate)
     mkdir -p nvt
     write_mdp "$MDP_DIR/nvt.mdp" nvt/nvt.mdp
-    gmx grompp -f nvt/nvt.mdp -c em/em.gro -r em/em.gro \
-      -p topology/topol.top -o nvt/nvt.tpr -maxwarn 2 >/dev/null
-    gmx mdrun -deffnm nvt/nvt "${MDRUN_GPU_ARGS[@]}" \
-      -ntomp "$(nproc)" >/dev/null 2>&1
-    OUT_EDR=nvt/nvt.edr
+    gmx grompp -f nvt/nvt.mdp -c em/em.gro -r em/em.gro -p topology/topol.top -o nvt/nvt.tpr -maxwarn 2 \
+      >nvt/grompp.out 2>&1 || { echo "grompp (nvt) failed:" >&2; tail -50 nvt/grompp.out >&2; exit 1; }
+    gmx mdrun -deffnm nvt/nvt "${MDRUN_GPU_ARGS[@]}" -ntmpi 1 -ntomp "$(nproc)" \
+      >nvt/mdrun.out 2>&1 || {
+        echo "mdrun (equilibrate) failed:" >&2
+        tail -50 nvt/mdrun.out >&2
+        [[ -f nvt/nvt.log ]] && { echo "--- nvt.log tail ---" >&2; tail -80 nvt/nvt.log >&2; }
+        exit 1
+      }
     OUT_GRO=nvt/nvt.gro
     LOG=nvt/nvt.log
     ;;
@@ -76,11 +71,15 @@ case "$STAGE" in
   production)
     mkdir -p prod
     write_mdp "$MDP_DIR/md.mdp" prod/md.mdp
-    gmx grompp -f prod/md.mdp -c nvt/nvt.gro -t nvt/nvt.cpt \
-      -p topology/topol.top -o prod/md.tpr -maxwarn 2 >/dev/null
-    gmx mdrun -deffnm prod/md "${MDRUN_GPU_ARGS[@]}" \
-      -ntomp "$(nproc)" >/dev/null 2>&1
-    OUT_EDR=prod/md.edr
+    gmx grompp -f prod/md.mdp -c nvt/nvt.gro -t nvt/nvt.cpt -p topology/topol.top -o prod/md.tpr -maxwarn 2 \
+      >prod/grompp.out 2>&1 || { echo "grompp (prod) failed:" >&2; tail -50 prod/grompp.out >&2; exit 1; }
+    gmx mdrun -deffnm prod/md "${MDRUN_GPU_ARGS[@]}" -ntmpi 1 -ntomp "$(nproc)" \
+      >prod/mdrun.out 2>&1 || {
+        echo "mdrun (production) failed:" >&2
+        tail -50 prod/mdrun.out >&2
+        [[ -f prod/md.log ]] && { echo "--- md.log tail ---" >&2; tail -80 prod/md.log >&2; }
+        exit 1
+      }
     OUT_GRO=prod/md.gro
     LOG=prod/md.log
     ;;
@@ -92,18 +91,19 @@ esac
 end_ts=$(date +%s.%N)
 walltime=$(awk -v s="$start_ts" -v e="$end_ts" 'BEGIN{printf "%.2f", e-s}')
 
-# Pull a couple of useful numbers out of the log.
-NSDAY=$(grep -oE "Performance: *[0-9.]+ *ns/day" "$LOG" | awk '{print $2}' | tail -1 || echo "")
-# Last "Potential" energy from the log table (not always present at minimize).
-FINAL_POT=$(grep -E "Potential" "$LOG" | tail -1 | awk '{print $NF}' || echo "")
+NSDAY=$(grep -E "^Performance:" "$LOG" 2>/dev/null | tail -1 | awk '{print $2}' || echo "")
+FINAL_POT=$(grep -E "Potential" "$LOG" 2>/dev/null | tail -1 | awk '{print $NF}' || echo "")
 
 python3 - <<PYEOF
 import json
+def fl(s):
+    try: return float(s)
+    except (TypeError, ValueError): return None
 print(json.dumps({
     "stage": "$STAGE",
-    "walltime_s": float("$walltime"),
-    "ns_per_day": float("$NSDAY") if "$NSDAY" else None,
-    "final_potential_kJ_mol": float("$FINAL_POT") if "$FINAL_POT" else None,
+    "walltime_s": fl("$walltime"),
+    "ns_per_day": fl("$NSDAY"),
+    "final_potential_kJ_mol": fl("$FINAL_POT"),
     "log": "$LOG",
     "trajectory": "$OUT_GRO" if "$STAGE" == "minimize" else "${OUT_GRO%.gro}.xtc"
 }))

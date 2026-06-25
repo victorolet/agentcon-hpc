@@ -5,3 +5,7 @@ azure-ai-agents>=1.0.0,<2.0.0
 azure-identity>=1.20.0
 python-dotenv>=1.0.1
 rich>=13.7.0
+
+# Analysis (workflow/analyze.py) — RMSD/energy parsing from xvg + PNG output.
+matplotlib>=3.7.0
+numpy>=1.24.0

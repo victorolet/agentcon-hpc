@@ -28,3 +28,10 @@ az cognitiveservices account list-models \
   --name foundtry-agent-con-resource \
   --resource-group agentcon-hpc-demo \
   --query "[?contains(name, 'gpt-4') && deprecation==null].{name:name, version:version, sku:skus[0].name}" -o table
+
+
+cd ~/agentcon-hpc/agentcon-hpc-demo
+WORKFLOW_DIR=/home/azureuser/agentcon-hpc/agentcon-hpc-demo/workflow \
+GMX_IMAGE=gromacs-demo:cuda \
+GPU_VENDOR=nvidia \
+python3 agent/agent.py

@@ -52,6 +52,6 @@ RUN useradd -ms /bin/bash -u 1000 sim
 USER sim
 WORKDIR /data
 
-COPY --chown=sim:sim entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=sim:sim --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["gmx", "--version"]

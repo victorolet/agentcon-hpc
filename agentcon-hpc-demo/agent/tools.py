@@ -170,6 +170,11 @@ def prepare_system(
         raise ValueError(f"force_field must be one of {sorted(ALLOWED_FF)}")
     if water_model not in ALLOWED_WATER:
         raise ValueError(f"water_model must be one of {sorted(ALLOWED_WATER)}")
+    # LLMs sometimes serialize numeric tool args as strings; coerce defensively.
+    try:
+        box_nm = float(box_nm)
+    except (TypeError, ValueError):
+        raise ValueError(f"box_nm must be a number, got {box_nm!r}")
     if not (0.5 <= box_nm <= 2.0):
         raise ValueError("box_nm must be between 0.5 and 2.0")
 
@@ -206,8 +211,13 @@ def run_stage(
     run_dir = DATA_DIR / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run not found: {run_id}")
-    if nsteps is not None and not (1 <= nsteps <= 250000):
-        raise ValueError("nsteps out of range (1..250000)")
+    if nsteps is not None:
+        try:
+            nsteps = int(nsteps)
+        except (TypeError, ValueError):
+            raise ValueError(f"nsteps must be an integer, got {nsteps!r}")
+        if not (1 <= nsteps <= 250000):
+            raise ValueError("nsteps out of range (1..250000)")
 
     args = [str(WORKFLOW_DIR / "run_stage.sh"), str(run_dir), stage]
     if nsteps is not None:

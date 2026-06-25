@@ -11,3 +11,20 @@ result=$(az vm list-sizes \
 if [[ -n "$result" ]]; then
     echo "$region"
 f
+
+
+
+az cognitiveservices account deployment create \
+  --resource-group agentcon-hpc-demo \
+  --name foundtry-agent-con-resource \
+  --deployment-name gpt-4o \
+  --model-name gpt-4o \
+  --model-format OpenAI \
+  --model-version 2024-08-06 \
+  --sku-name GlobalStandard \
+  --sku-capacity 10
+
+az cognitiveservices account list-models \
+  --name foundtry-agent-con-resource \
+  --resource-group agentcon-hpc-demo \
+  --query "[?contains(name, 'gpt-4') && deprecation==null].{name:name, version:version, sku:skus[0].name}" -o table

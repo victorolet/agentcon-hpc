@@ -60,7 +60,7 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
 
 
 # --------------------------------------------------------------------------
-# Tools
+# GPU probes
 # --------------------------------------------------------------------------
 
 def _probe_gpu_nvidia() -> tuple[bool, str]:
@@ -89,7 +89,6 @@ def _probe_gpu_amd() -> tuple[bool, str]:
     )
     if out.returncode != 0:
         return False, ""
-    # rocminfo prints lines like "  Name:                    gfx900"
     gfx = ""
     marketing = ""
     for line in out.stdout.splitlines():
@@ -102,6 +101,10 @@ def _probe_gpu_amd() -> tuple[bool, str]:
         return True, f"{marketing or 'AMD GPU'} ({gfx})"
     return False, ""
 
+
+# --------------------------------------------------------------------------
+# Tools
+# --------------------------------------------------------------------------
 
 def check_environment() -> str:
     """Verify Docker, the GPU runtime, and the GROMACS image are available.
@@ -119,11 +122,17 @@ def check_environment() -> str:
     gpu_name = ""
 
     if docker_ok:
+        # List all image refs and exact-match by line. We used to pass
+        # GMX_IMAGE as a positional filter to `docker images`, but newer
+        # Docker versions (containerd-backed image store, ~25+) handle
+        # positional ref filters differently and may return empty stdout
+        # for a tag-qualified match. Listing all and exact-matching the
+        # full "repo:tag" line is version-independent.
         out = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}", GMX_IMAGE],
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
             text=True, capture_output=True,
         )
-        if out.returncode == 0 and GMX_IMAGE in out.stdout:
+        if out.returncode == 0 and GMX_IMAGE in out.stdout.splitlines():
             image_present = True
             image_tag = GMX_IMAGE
 
@@ -159,7 +168,7 @@ def prepare_system(
         pdb_id: 4-character RCSB PDB identifier, e.g. "1AKI".
         force_field: GROMACS force field name. One of: oplsaa, amber99sb-ildn, charmm27.
         water_model: Water model. One of: spc, spce, tip3p, tip4p.
-        box_nm: Distance from solute to box edge, in nm. Range 0.5–2.0.
+        box_nm: Distance from solute to box edge, in nm. Range 0.5-2.0.
 
     Returns a JSON object with run_id (used by later tools), pdb_id,
     n_atoms, n_water, box_nm, and the list of files produced.
@@ -187,7 +196,7 @@ def prepare_system(
          str(run_dir), pdb_id.upper(), force_field, water_model, str(box_nm)],
         timeout=600,
     )
-    return out.strip().splitlines()[-1]  # last line is the JSON summary
+    return out.strip().splitlines()[-1]
 
 
 def run_stage(
@@ -262,7 +271,6 @@ def get_run_status(run_id: str) -> str:
     run_dir = DATA_DIR / run_id
     if not run_dir.is_dir():
         raise FileNotFoundError(f"run not found: {run_id}")
-    # Pick the most recently-modified log under em/, nvt/, prod/.
     candidates = list(run_dir.glob("*/[en]*.log")) + list(run_dir.glob("prod/md.log"))
     if not candidates:
         return json.dumps({"stage": None, "last_log_line": None, "walltime_so_far_s": 0})
@@ -287,7 +295,7 @@ def report(run_id: str) -> str:
     run_dir = DATA_DIR / run_id
     analysis = run_dir / "analysis"
     if not analysis.is_dir():
-        raise FileNotFoundError("no analysis output yet — call analyze() first")
+        raise FileNotFoundError("no analysis output yet - call analyze() first")
 
     plots = sorted(str(p) for p in analysis.glob("*.png"))
     files = {

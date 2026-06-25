@@ -1,4 +1,7 @@
-azure-ai-projects>=1.0.0b7
-azure-identity>=1.17.0
+# GA agents SDK. AgentsClient is the canonical entry point — no need to
+# pull in azure-ai-projects unless you also want project-level operations
+# (connections, deployments, datasets).
+azure-ai-agents>=1.0.0,<2.0.0
+azure-identity>=1.20.0
 python-dotenv>=1.0.1
 rich>=13.7.0

@@ -38,6 +38,10 @@ Operating rules:
 4. After production, call `analyze` for "rmsd" and "potential" at minimum.
    Add "temperature" if the user mentioned thermal stability.
 
+4b. After analysis, call `visualize_trajectory` once to produce the viewable
+   PDB and HTML viewer. Mention both viewing options to the user in your
+   final summary (browser via viewer.html, or VMD/PyMOL/VS Code via the PDB).
+
 5. After analysis, call `report` once to bundle results, then write the
    final natural-language summary to the user. The summary should:
      - state what was simulated and on what hardware

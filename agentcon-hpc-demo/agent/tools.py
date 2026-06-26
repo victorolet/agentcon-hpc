@@ -23,7 +23,8 @@ ALLOWED_WATER = {"spc", "spce", "tip3p", "tip4p"}
 
 def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> str:
     try:
-        res = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, timeout=timeout, check=True)
+        res = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True,
+                             timeout=timeout, check=True)
         return res.stdout
     except subprocess.CalledProcessError as e:
         tail = (e.stderr or "")[-2000:]
@@ -48,10 +49,8 @@ def _probe_gpu_amd() -> tuple[bool, str]:
     out = subprocess.run(
         ["docker", "run", "--rm",
          "--device=/dev/kfd", "--device=/dev/dri",
-         "--group-add", "video",
-         "--security-opt", "seccomp=unconfined",
-         "rocm/rocm-terminal:5.7",
-         "/opt/rocm/bin/rocminfo"],
+         "--group-add", "video", "--security-opt", "seccomp=unconfined",
+         "rocm/rocm-terminal:5.7", "/opt/rocm/bin/rocminfo"],
         text=True, capture_output=True, timeout=60,
     )
     if out.returncode != 0:
@@ -72,12 +71,8 @@ def _probe_gpu_amd() -> tuple[bool, str]:
 def check_environment() -> str:
     """Verify Docker and the GPU runtime are available.
 
-    Reports the configured image tag without verifying it exists locally;
-    prepare_system will surface a clear error from docker if the tag is
-    actually missing, so we skip the brittle pre-check.
-
-    Returns JSON: docker_ok, gpu_vendor, gpu_ok, gpu_name, image_present, image_tag.
-    image_present is always reported true (no pre-check); rely on prepare_system errors.
+    image_present is always reported true (no pre-check); rely on
+    prepare_system errors to surface a missing image cleanly.
     """
     docker_ok = shutil.which("docker") is not None
     image_present = True
@@ -116,7 +111,7 @@ def prepare_system(
 
     Args:
         pdb_id: 4-character RCSB PDB identifier, e.g. "1AKI".
-        force_field: GROMACS force field name. One of: oplsaa, amber99sb-ildn, charmm27.
+        force_field: GROMACS force field. One of: oplsaa, amber99sb-ildn, charmm27.
         water_model: Water model. One of: spc, spce, tip3p, tip4p.
         box_nm: Distance from solute to box edge in nm, 0.5-2.0.
     """
@@ -200,6 +195,30 @@ def analyze(
     return out.strip().splitlines()[-1]
 
 
+def visualize_trajectory(run_id: str) -> str:
+    """Produce a viewable trajectory file and an HTML viewer.
+
+    Runs gmx trjconv to center the protein and correct periodic boundary
+    conditions, then writes:
+      - analysis/trajectory.pdb (multi-MODEL PDB, opens in VMD, PyMOL,
+        ChimeraX, or VS Code's Molecular Visualization extension)
+      - analysis/viewer.html (standalone HTML viewer using NGL.js, opens
+        in any browser, no install)
+
+    Args:
+        run_id: ID returned by prepare_system.
+    """
+    run_dir = DATA_DIR / run_id
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"run not found: {run_id}")
+
+    out = _run(
+        [str(WORKFLOW_DIR / "visualize.sh"), str(run_dir)],
+        timeout=300,
+    )
+    return out.strip().splitlines()[-1]
+
+
 def get_run_status(run_id: str) -> str:
     """Report progress of an in-flight stage by tailing its log file."""
     run_dir = DATA_DIR / run_id
@@ -225,15 +244,19 @@ def report(run_id: str) -> str:
         raise FileNotFoundError("no analysis output yet - call analyze() first")
 
     plots = sorted(str(p) for p in analysis.glob("*.png"))
+    viewer = analysis / "viewer.html"
+    pdb = analysis / "trajectory.pdb"
     files = {
         "topology": str(run_dir / "topology" / "topol.top"),
-        "trajectory": str(run_dir / "prod" / "md.xtc"),
+        "trajectory_xtc": str(run_dir / "prod" / "md.xtc"),
         "production_gro": str(run_dir / "prod" / "md.gro"),
+        "trajectory_pdb": str(pdb) if pdb.exists() else None,
+        "viewer_html": str(viewer) if viewer.exists() else None,
     }
     return json.dumps({
         "run_id": run_id,
         "plots": plots,
-        "files": {k: v for k, v in files.items() if Path(v).exists()},
+        "files": {k: v for k, v in files.items() if v},
         "data_dir": str(run_dir),
     })
 
@@ -243,6 +266,7 @@ ALL_TOOLS = {
     prepare_system,
     run_stage,
     analyze,
+    visualize_trajectory,
     get_run_status,
     report,
 }

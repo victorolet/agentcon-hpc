@@ -35,3 +35,13 @@ WORKFLOW_DIR=/home/azureuser/agentcon-hpc/agentcon-hpc-demo/workflow \
 GMX_IMAGE=gromacs-demo:cuda \
 GPU_VENDOR=nvidia \
 python3 agent/agent.py
+
+az network nsg rule update   -g agentcon-hpc-demo   --nsg-name hpc-agent-vm-nsg   -n allow-ssh-from-me   --source-address-prefixes 45.248.78.27
+
+https://api.ipify.org/
+
+sed -i 's|^GMX_IMAGE=.*|GMX_IMAGE=gromacs-demo:cuda|' \
+  ~/agentcon-hpc/agentcon-hpc-demo/agent/.env
+
+grep GMX_IMAGE ~/agentcon-hpc/agentcon-hpc-demo/agent/.env
+# should print exactly: GMX_IMAGE=gromacs-demo:cuda
